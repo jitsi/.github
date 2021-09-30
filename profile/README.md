@@ -1,29 +1,14 @@
-# <p align="center">Jitsi</p>
-
-Welcome to the Jitsi organization, home to the Jitsi projects.
-
-Jitsi Meet is a set of Open Source projects which empower users to use and deploy
-video conferencing platforms with state-of-the-art video quality and features.
-
-<hr />
-
 <p align="center">
 <img src="https://raw.githubusercontent.com/jitsi/.github/main/readme-img1.png" width="900" />
 </p>
 
 <hr />
 
-Amongst others here are the main features Jitsi Meet offers:
+Welcome to the Jitsi organization, home to the [Jitsi](https://jitsi.org) projects.
 
-* Support for all current browsers
-* Mobile applications
-* Web and native SDKs for integration
-* HD audio and video
-* Content sharing
-* End-to-End Encryption
-* Raise hand and reactions
-* Chat with private conversations
-* Polls
-* Virtual backgrounds
+## Links
 
-And many more!
+* 🌍 [meet.jit.si](https://meet.jit.si): Free Jitsi Meet instance, provising state-of-the-art video conferencing.
+* 📢 [Community forum](https://community.jitsi.org): Forum for questions abount anything and everything Jitsi related.
+* 📖 [Documentation](https://jitsi.github.io/handbook/): Documentation for users, developers and self-hosters.
+* 🛠 [JaaS - Jitsi as a Service](https://jaas.8x8.vc/#/): Would you like to leverage all the power of Jitsi on your own app? Look no further than JaaS.
