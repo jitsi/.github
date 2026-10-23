@@ -1,0 +1,215 @@
+# Reusable CLA check for pull requests to jitsi repos.
+#
+# Called from each repo's .github/workflows/cla.yml on pull_request_target.
+# It never checks out or runs code from the pull request, which is what makes
+# it safe to hand it secrets for PRs from forks.
+#
+# Every commit author email of the PR is hashed with CLA_HASH_KEY
+# (HMAC-SHA256 of the trimmed, lowercased email) and looked up in the signer
+# list, which holds one "hmac,date,envelope id" line per signer.
+name: CLA check
+
+on:
+  workflow_call:
+    inputs:
+      signers-repo:
+        description: Private repo in the same org that holds the signer list
+        type: string
+        default: cla-signers
+      signers-path:
+        description: Path of the signer list in signers-repo
+        type: string
+        default: cla-signers.txt
+      label:
+        description: Label added to PRs that are waiting for a CLA
+        type: string
+        default: info:cla-missing
+      signed-label:
+        description: Label added to PRs whose commits are all covered by a signed CLA
+        type: string
+        default: info:cla-signed
+    secrets:
+      CLA_HASH_KEY:
+        required: true
+      CLA_APP_CLIENT_ID:
+        required: true
+      CLA_APP_PRIVATE_KEY:
+        required: true
+
+permissions: {}
+
+jobs:
+  cla:
+    name: CLA
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Check whether the author needs a CLA
+        id: gate
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          debug: false
+          script: |
+            const pr = context.payload.pull_request;
+            const trusted = [ 'OWNER', 'MEMBER', 'COLLABORATOR' ];
+
+            if (pr.user.type === 'Bot') {
+                core.info(`${pr.user.login} is a bot, no CLA needed.`);
+                core.setOutput('check', 'false');
+            } else if (trusted.includes(pr.author_association)) {
+                core.info(`${pr.user.login} is ${pr.author_association}, no CLA needed.`);
+                core.setOutput('check', 'false');
+            } else {
+                core.setOutput('check', 'true');
+            }
+
+      - name: Get a token to read the signer list
+        id: app-token
+        if: steps.gate.outputs.check == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.CLA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CLA_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.signers-repo }}
+          permission-contents: read
+          permission-members: read
+
+      - name: Check commit emails against the signer list
+        if: steps.gate.outputs.check == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          CLA_HASH_KEY: ${{ secrets.CLA_HASH_KEY }}
+          SIGNERS_REPO: ${{ inputs.signers-repo }}
+          SIGNERS_PATH: ${{ inputs.signers-path }}
+          LABEL: ${{ inputs.label }}
+          SIGNED_LABEL: ${{ inputs.signed-label }}
+        with:
+          debug: false
+          script: |
+            const crypto = require('crypto');
+
+            const MARKER = '<!-- jitsi-cla-check -->';
+            const COMMENT = `${MARKER}
+            Hi, thanks for your contribution!
+            If you haven't already done so, could you please make sure you sign our CLA (https://jitsi.org/icla for individuals and https://jitsi.org/ccla for corporations)? We would unfortunately be unable to merge your patch unless we have that piece :(.
+
+            Please sign with the email address your commits are authored with. GitHub's \`users.noreply.github.com\` addresses can't be matched. The **CLA** check lists the commit emails it couldn't match, and it runs again on its own once your signature is recorded.`;
+
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            const key = process.env.CLA_HASH_KEY;
+
+            if (!key) {
+                core.setFailed('CLA_HASH_KEY is not available to this workflow.');
+
+                return;
+            }
+
+            const app = getOctokit(process.env.APP_TOKEN);
+            const memberCache = new Map();
+
+            // author_association shows private org members as CONTRIBUTOR, so ask the org.
+            async function isOrgMember(login) {
+                if (!memberCache.has(login)) {
+                    try {
+                        await app.rest.orgs.checkMembershipForUser({ org: owner, username: login });
+                        memberCache.set(login, true);
+                    } catch (e) {
+                        if (e.status !== 404) {
+                            throw e;
+                        }
+                        memberCache.set(login, false);
+                    }
+                }
+
+                return memberCache.get(login);
+            }
+
+            // On a re-run the payload is the original event's, so don't trust pr.labels here.
+            async function removeLabel(name) {
+                try {
+                    await github.rest.issues.removeLabel({
+                        owner, repo, issue_number: pr.number, name });
+                } catch (e) {
+                    if (e.status !== 404) {
+                        throw e;
+                    }
+                }
+            }
+
+            if (await isOrgMember(pr.user.login)) {
+                core.info(`${pr.user.login} is a member of ${owner}, no CLA needed.`);
+                await removeLabel(process.env.LABEL);
+
+                return;
+            }
+
+            const { data: list } = await app.rest.repos.getContent({
+                owner,
+                repo: process.env.SIGNERS_REPO,
+                path: process.env.SIGNERS_PATH,
+                mediaType: { format: 'raw' }
+            });
+            const signed = new Set(String(list).split('\n')
+                .map(line => line.trim())
+                .filter(line => line && !line.startsWith('#'))
+                .map(line => line.split(',')[0].toLowerCase()));
+
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+                owner, repo, pull_number: pr.number, per_page: 100 });
+            const missing = new Map();
+
+            for (const c of commits) {
+                const email = (c.commit.author?.email || '').trim().toLowerCase();
+
+                // GitHub links a commit to an account only by a verified email of that account.
+                if (c.author?.login && await isOrgMember(c.author.login)) {
+                    continue;
+                }
+
+                const hmac = crypto.createHmac('sha256', key).update(email, 'utf8').digest('hex');
+
+                if (!email || !signed.has(hmac)) {
+                    const shas = missing.get(email) || [];
+
+                    shas.push(c.sha.substring(0, 10));
+                    missing.set(email, shas);
+                }
+            }
+
+            if (missing.size === 0) {
+                core.info(`All ${commits.length} commit(s) are covered by a signed CLA.`);
+                await removeLabel(process.env.LABEL);
+                await github.rest.issues.addLabels({
+                    owner, repo, issue_number: pr.number, labels: [ process.env.SIGNED_LABEL ] });
+
+                return;
+            }
+
+            await removeLabel(process.env.SIGNED_LABEL);
+            await github.rest.issues.addLabels({
+                owner, repo, issue_number: pr.number, labels: [ process.env.LABEL ] });
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pr.number, per_page: 100 });
+
+            if (!comments.some(c => c.user?.type === 'Bot' && c.body?.includes(MARKER))) {
+                await github.rest.issues.createComment({
+                    owner, repo, issue_number: pr.number, body: COMMENT });
+            }
+
+            const lines = [ ...missing ].map(([ email, shas ]) =>
+                `- ${email || '(no author email)'}: ${shas.join(', ')}`);
+
+            await core.summary
+                .addHeading('CLA not found', 3)
+                .addRaw('No signed CLA was found for these commit author emails:\n\n')
+                .addRaw(`${lines.join('\n')}\n\n`)
+                .addRaw('Sign at https://jitsi.org/icla (individuals) or https://jitsi.org/ccla '
+                    + '(corporations) with the same email.\n')
+                .write();
+            core.setFailed(`No signed CLA for: ${[ ...missing.keys() ].map(e => e || '(no author email)').join(', ')}`);
