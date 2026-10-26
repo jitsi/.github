@@ -97,7 +97,7 @@ jobs:
             Hi, thanks for your contribution!
             If you haven't already done so, could you please make sure you sign our CLA (https://jitsi.org/icla for individuals and https://jitsi.org/ccla for corporations)? We would unfortunately be unable to merge your patch unless we have that piece :(.
 
-            Please sign with the email address your commits are authored with. GitHub's \`users.noreply.github.com\` addresses can't be matched. The **CLA** check lists the commit emails it couldn't match, and it runs again on its own once your signature is recorded.`;
+            Please sign the CLA with the email address your commits are authored with. If you keep your email private, that can be your \`users.noreply.github.com\` address. The **CLA** check lists the commit emails it couldn't match, and it runs again on its own once your signature is recorded.`;
 
             const pr = context.payload.pull_request;
             const { owner, repo } = context.repo;
@@ -210,6 +210,6 @@ jobs:
                 .addRaw('No signed CLA was found for these commit author emails:\n\n')
                 .addRaw(`${lines.join('\n')}\n\n`)
                 .addRaw('Sign at https://jitsi.org/icla (individuals) or https://jitsi.org/ccla '
-                    + '(corporations) with the same email.\n')
+                    + '(corporations) with the same email, which can be a users.noreply.github.com address.\n')
                 .write();
             core.setFailed(`No signed CLA for: ${[ ...missing.keys() ].map(e => e || '(no author email)').join(', ')}`);
