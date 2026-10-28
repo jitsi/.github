@@ -166,6 +166,15 @@ jobs:
             for (const c of commits) {
                 const email = (c.commit.author?.email || '').trim().toLowerCase();
 
+                // GitHub's "Update branch" button authors its merges with the account's noreply
+                // address, not the one the contributor signed with. Skip only merges GitHub made
+                // and signed; other merges can carry changes of their own.
+                if (c.parents?.length > 1
+                        && c.commit.committer?.email === 'noreply@github.com'
+                        && c.commit.verification?.verified === true) {
+                    continue;
+                }
+
                 // GitHub links a commit to an account only by a verified email of that account.
                 if (c.author?.login && await isOrgMember(c.author.login)) {
                     continue;
